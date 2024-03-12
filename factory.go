@@ -14,7 +14,6 @@ import (
 
 var ErrShutdownInProgress = errors.New("factory shutdown in progress")
 
-// Config is factory configuration to set values that persist through all spawned children
 type Config struct {
 	FactoryIdentifier string // Makes it easier to track down stuck contexts
 	MaxTTL            time.Duration
@@ -22,9 +21,8 @@ type Config struct {
 	DebugMode         bool
 }
 
-// Factory holds the state of a context factory
 type Factory struct {
-	closed               int32
+	closed               atomic.Bool
 	defaultsLock         *sync.RWMutex
 	requestTTL           time.Duration
 	injectors            []Injector
@@ -32,12 +30,10 @@ type Factory struct {
 	defaultContextCt     int
 	openContexts         int32
 	openContextWg        *sync.WaitGroup
-	openBackgroundTasks  *sync.WaitGroup
-	// factoryLogger is still a required due to the fact that shutdown crashes need to be logged, there is probably
-	// some room for improvement later to remove this
-	factoryLogger     zerolog.Logger
-	factoryIdentifier string
-	config            Config
+	factoryLogger        zerolog.Logger
+	factoryIdentifier    string
+	config               Config
+	done                 chan struct{}
 }
 
 func (factory *Factory) StoreDefault(key, value any) {
@@ -49,13 +45,16 @@ func (factory *Factory) StoreDefault(key, value any) {
 	factory.defaultsLock.Unlock()
 }
 
+// GetDefault pulls the default injector for new contexts for a given key.
 func (factory *Factory) GetDefault(key any) any {
 	factory.defaultsLock.RLock()
 	defer factory.defaultsLock.RUnlock()
 	return factory.defaultContextValues[key]
 }
 
-// NewRequestFactory creates a new context factory off a given configuration
+// NewRequestFactory creates a new context factory off a given configuration.
+// Factories should be created with all injectors allocated at the time they are created.
+// Dynamic addition of injectors is not supported
 func NewRequestFactory(config Config, injectors ...Injector) (*Factory, error) {
 	factory := &Factory{
 		defaultsLock:         &sync.RWMutex{},
@@ -63,9 +62,9 @@ func NewRequestFactory(config Config, injectors ...Injector) (*Factory, error) {
 		factoryLogger:        config.LogOutput,
 		factoryIdentifier:    config.FactoryIdentifier,
 		defaultContextValues: make(map[any]any),
-		openBackgroundTasks:  &sync.WaitGroup{},
 		openContextWg:        &sync.WaitGroup{},
 		injectors:            injectors,
+		done:                 make(chan struct{}),
 		config:               config,
 	}
 	// Bind all mounts
@@ -77,33 +76,34 @@ func NewRequestFactory(config Config, injectors ...Injector) (*Factory, error) {
 	return factory, nil
 }
 
-// Shutdown ensures that background tasks are completed before the factory shuts down, returns true if a clean shutdown
+// Shutdown ensures that background tasks are completed before the factory shut down, returns true if a clean shutdown
 // occurred
+// A deadline that is at least as long as the average request context is recommended
 func (factory *Factory) Shutdown(deadline time.Duration) bool {
-	atomic.StoreInt32(&factory.closed, 1)
-	// This can technically still race when shutdown is called with a spawn at the same time.
-	// This can be fixed but requires a lot of work, while this sleep is less than ideal, this will stop 99.99% of the issues
-	time.Sleep(time.Millisecond * 10)
+	// Set the shutdown bit
+	if !factory.closed.CompareAndSwap(false, true) {
+		return false
+	}
+	close(factory.done)
 	c := make(chan struct{})
 	go func() {
 		factory.openContextWg.Wait()
-		factory.openBackgroundTasks.Wait()
 		close(c)
 	}()
 	defer func() {
-		// Call the lifecycle for the unmount
 		for k := len(factory.injectors); k >= 0; k-- {
 			func() {
 				factory.defaultsLock.RLock()
 				defer factory.defaultsLock.RUnlock()
-				// Unlike other methods we need to make sure these are crash proof as there could severe side-effects
-				// from an improper shutdown.
 				defer func() {
+					// Handle any panics that are recoverable and bubbled up through.
 					if r := recover(); r != nil {
-						factory.factoryLogger.Error().Interface("error", r)
+						factory.factoryLogger.Error().Interface("err", r).Send()
 					}
 				}()
-				factory.injectors[k].OnFactoryUnmount(factory)
+				if err := factory.injectors[k].OnFactoryUnmount(factory); err != nil {
+					factory.factoryLogger.Error().Err(err).Send()
+				}
 			}()
 		}
 	}()
@@ -115,9 +115,13 @@ func (factory *Factory) Shutdown(deadline time.Duration) bool {
 	}
 }
 
+func (factory *Factory) Done() <-chan struct{} {
+	return factory.done
+}
+
 // Wrap a context with a core context
 func (factory *Factory) Wrap(ctx context.Context) (Context, error) {
-	if atomic.LoadInt32(&factory.closed) == 1 {
+	if factory.closed.Load() {
 		return nil, ErrShutdownInProgress
 	}
 	newCtx := factory.newCtx(factory.requestTTL)
@@ -132,7 +136,7 @@ func (factory *Factory) OpenContexts() int {
 
 // NewCtx creates a new context for the application
 func (factory *Factory) NewCtx() (Context, error) {
-	if atomic.LoadInt32(&factory.closed) == 1 {
+	if factory.closed.Load() {
 		return nil, ErrShutdownInProgress
 	}
 	return factory.newCtx(factory.requestTTL), nil
@@ -169,12 +173,12 @@ func (factory *Factory) newCtx(deadline time.Duration) *Request {
 		}
 	}
 	ctx.startedAt = time.Now()
-	// Calculate what created this context
+	// Get what created this context for debug purposes
 	_, file, line, _ := runtime.Caller(2)
 	ctx.startedBy = file + ":" + strconv.Itoa(line)
 	ctx.deadline = deadline
-	// This needs to store the context inside itself so it can resolve on a generic context call. This allows it to wrap
-	// itself or be double resolved without danger
+	// Store the initial base context that was used to create this.
+	// If no values are found in this context, it will resolve this context chain to try to find the value.
 	ctx.contextValues[BaseContextKey{}] = ctx
 	if factory.requestTTL == NoTTL {
 		ctx.infinite = true
@@ -185,8 +189,4 @@ func (factory *Factory) newCtx(deadline time.Duration) *Request {
 		go ctx.startDeadline()
 	}
 	return ctx
-}
-
-func (factory *Factory) GetLogger() zerolog.Logger {
-	return factory.factoryLogger
 }
