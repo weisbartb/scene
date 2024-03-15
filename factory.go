@@ -1,7 +1,7 @@
 package scene
 
 import (
-	"context"
+	ogContext "context"
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
@@ -25,7 +25,7 @@ type Factory struct {
 	closed               atomic.Bool
 	defaultsLock         *sync.RWMutex
 	requestTTL           time.Duration
-	injectors            []Injector
+	injectors            []Provider
 	defaultContextValues map[any]any
 	defaultContextCt     int
 	openContexts         int32
@@ -52,10 +52,10 @@ func (factory *Factory) GetDefault(key any) any {
 	return factory.defaultContextValues[key]
 }
 
-// NewRequestFactory creates a new context factory off a given configuration.
+// NewSceneFactor creates a new context factory off a given configuration.
 // Factories should be created with all injectors allocated at the time they are created.
 // Dynamic addition of injectors is not supported
-func NewRequestFactory(config Config, injectors ...Injector) (*Factory, error) {
+func NewSceneFactor(config Config, injectors ...Provider) (*Factory, error) {
 	factory := &Factory{
 		defaultsLock:         &sync.RWMutex{},
 		requestTTL:           config.MaxTTL,
@@ -120,26 +120,25 @@ func (factory *Factory) Done() <-chan struct{} {
 }
 
 // Wrap a context with a core context
-func (factory *Factory) Wrap(ctx context.Context) (Context, error) {
+func (factory *Factory) Wrap(ctx ogContext.Context) (Context, error) {
 	if factory.closed.Load() {
 		return nil, ErrShutdownInProgress
 	}
-	newCtx := factory.newCtx(factory.requestTTL)
-	newCtx.Context = ctx
+	newCtx := factory.newCtx(ctx, factory.requestTTL)
 	return newCtx, nil
 }
 
-// OpenContexts gets the count of all of the open contexts
+// OpenContexts gets the count of all the open contexts
 func (factory *Factory) OpenContexts() int {
 	return int(atomic.LoadInt32(&factory.openContexts))
 }
 
-// NewCtx creates a new context for the application
-func (factory *Factory) NewCtx() (Context, error) {
+// NewScene creates a new context for the application
+func (factory *Factory) NewScene() (Context, error) {
 	if factory.closed.Load() {
 		return nil, ErrShutdownInProgress
 	}
-	return factory.newCtx(factory.requestTTL), nil
+	return factory.newCtx(ogContext.Background(), factory.requestTTL), nil
 }
 
 // DefaultTTL gets the default TTL
@@ -147,11 +146,12 @@ func (factory *Factory) DefaultTTL() time.Duration {
 	return factory.requestTTL
 }
 
-func (factory *Factory) newCtx(deadline time.Duration) *Request {
+func (factory *Factory) newCtx(baseCtx ogContext.Context, deadline time.Duration) Context {
 	atomic.AddInt32(&factory.openContexts, 1)
 	factory.openContextWg.Add(1)
 	requestID := uuid.New().String()
-	ctx := &Request{
+	ctx := &context{
+		Context:       baseCtx,
 		factory:       factory,
 		complete:      make(chan struct{}),
 		contextValues: make(map[any]any, factory.defaultContextCt+10), // Pre-size the context
@@ -179,14 +179,10 @@ func (factory *Factory) newCtx(deadline time.Duration) *Request {
 	ctx.deadline = deadline
 	// Store the initial base context that was used to create this.
 	// If no values are found in this context, it will resolve this context chain to try to find the value.
-	ctx.contextValues[BaseContextKey{}] = ctx
-	if factory.requestTTL == NoTTL {
-		ctx.infinite = true
-		return ctx
-	}
+	ctx.contextValues[ContextRef{}] = ctx
 	if deadline > 0 {
 		ctx.completeBy = time.Now().Add(deadline).UnixNano()
-		go ctx.startDeadline()
+		go ctx.refreshDeadline()
 	}
 	return ctx
 }

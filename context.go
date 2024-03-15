@@ -1,7 +1,7 @@
 package scene
 
 import (
-	"context"
+	ogContext "context"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -9,13 +9,13 @@ import (
 	"github.com/weisbartb/stack"
 )
 
-// Request represents the state of a given context with a link to its parent factory
-type Request struct {
+// context represents the state of a given context with a link to its parent factory
+type context struct {
 	// For now, this is a linked context to allow other context injectors to play nice with it
-	context.Context
+	ogContext.Context
 	// The factory pointer
 	factory *Factory
-	// When the request needs to complete by
+	// When the request needs to complete by, stored as int64 for atomic.LoadInt64
 	completeBy int64 // unix-nano
 	// The ID of the context
 	id string
@@ -23,8 +23,6 @@ type Request struct {
 	complete chan struct{}
 	// Context value map (values are not thread-safe) that stores various metadata about the context
 	contextValues map[any]any
-	// If the context is non-expiring
-	infinite bool
 	// is this context marked as completed?
 	isComplete bool
 	// The error that is stored when Complete is invoked
@@ -36,17 +34,29 @@ type Request struct {
 	// When the context was started
 	startedAt time.Time
 	// What file/line started the context
-	startedBy string
-	mu        *sync.RWMutex
+	startedBy   string
+	mu          *sync.RWMutex
+	activeTimer *time.Timer
 }
 
-// startDeadline is a helper method to ensure context items are destroyed when their TTL expires
-func (c *Request) startDeadline() {
+// refreshDeadline updates the context deadline when called
+func (c *context) refreshDeadline() {
+	var setupMonitor bool
+	c.mu.Lock()
+	if c.activeTimer != nil {
+		c.activeTimer.Reset(time.Until(time.Unix(0, c.completeBy)))
+	} else {
+		c.activeTimer = time.NewTimer(time.Until(time.Unix(0, c.completeBy)))
+		setupMonitor = true
+	}
+	c.mu.Unlock()
+	if !setupMonitor {
+		return
+	}
 	// Force the context to complete at a specific time, this will close the context and signal everything to stop working
 	// The logging instance is NOT destroyed
-	timer := time.After(time.Until(time.Unix(0, atomic.LoadInt64(&c.completeBy))))
 	select {
-	case <-timer:
+	case <-c.activeTimer.C:
 		c.CompleteWithError(stack.Trace(ErrTimeout, stack.ErrorKVP{
 			Key:   "startedBy",
 			Value: c.startedBy,
@@ -66,19 +76,22 @@ func (c *Request) startDeadline() {
 	}
 }
 
-func (c *Request) Attach(with func(chained context.Context) (newCtx context.Context)) {
-	child := with(c.Context)
-	c.Context = child
+func (c *context) Attach(ctx ogContext.Context) {
+	if c2, ok := ctx.(*context); ok {
+		c.Context = c2.Context
+		return
+	}
+	c.Context = ctx
 }
 
-func (c *Request) Defer(fn CompleteFunc) {
+func (c *context) Defer(fn CompleteFunc) {
 	c.mu.Lock()
 	c.onComplete = append(c.onComplete, fn)
 	c.mu.Unlock()
 }
 
 // Store puts a new value inside the context, the value does not need to be thread-safe (but can be)
-func (c *Request) Store(key, value any) {
+func (c *context) Store(key, value any) {
 	c.mu.Lock()
 	if c.isComplete {
 		c.mu.Unlock()
@@ -88,9 +101,13 @@ func (c *Request) Store(key, value any) {
 	c.mu.Unlock()
 }
 
+func (c *context) GetBaseCtx() ogContext.Context {
+	return c.Context
+}
+
 // Spawn a new context that needs to complete by a given time.
 // A zero-value time will produce an infinitely running child context.
-func (c *Request) Spawn(completeBy time.Time) (Context, error) {
+func (c *context) Spawn(completeBy time.Time) (Context, error) {
 	c.mu.Lock()
 	isComplete := c.isComplete
 	c.mu.Unlock()
@@ -101,7 +118,7 @@ func (c *Request) Spawn(completeBy time.Time) (Context, error) {
 	if !completeBy.IsZero() {
 		ttl = time.Until(completeBy)
 	}
-	newCtx := c.factory.newCtx(ttl)
+	newCtx := c.factory.newCtx(c.Context, ttl)
 	defer func() {
 		if r := recover(); r != nil {
 			// Complete the context since this can cause issues with a factory being stuck
@@ -118,21 +135,21 @@ func (c *Request) Spawn(completeBy time.Time) (Context, error) {
 
 // Deadline returns a time when the request will be marked as timed out.
 // If ok is set to false, it can be ignored
-func (c *Request) Deadline() (deadline time.Time, ok bool) {
-	if c.infinite {
+func (c *context) Deadline() (deadline time.Time, ok bool) {
+	if c.deadline == 0 {
 		ok = false
 		return
 	}
-	return time.Unix(0, atomic.LoadInt64(&c.completeBy)), !c.infinite
+	return time.Unix(0, atomic.LoadInt64(&c.completeBy)), true
 }
 
 // Done returns a completion channel notifying a listener if the context was completed or not
-func (c *Request) Done() <-chan struct{} {
+func (c *context) Done() <-chan struct{} {
 	return c.complete
 }
 
 // GetLastError Returns the last error for a given context.
-func (c *Request) GetLastError() error {
+func (c *context) GetLastError() error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.err != nil {
@@ -144,8 +161,13 @@ func (c *Request) GetLastError() error {
 	return nil
 }
 
+// Err is the context override for GetLastError
+func (c *context) Err() error {
+	return c.GetLastError()
+}
+
 // Value will get an item from the context if found, otherwise will navigate through any child context(s) if applicable.
-func (c *Request) Value(key any) any {
+func (c *context) Value(key any) any {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.contextValues != nil {
@@ -161,12 +183,12 @@ func (c *Request) Value(key any) any {
 
 // Complete a context, this sets a special error as the go implementation of context requires closed context's to have
 // an error when its complete
-func (c *Request) Complete() {
+func (c *context) Complete() {
 	c.CompleteWithError(ErrComplete)
 }
 
 // CompleteWithError finishes an open context with a specific error, if the error is nil it will finish with ErrComplete
-func (c *Request) CompleteWithError(err error) {
+func (c *context) CompleteWithError(err error) {
 	// Ensure this doesn't "complete" twice
 	c.mu.Lock()
 	if c.isComplete {

@@ -25,7 +25,7 @@ func TestNewCoreContextFactory(t *testing.T) {
 	t.Parallel()
 	buf := tsbuffer.New()
 	logger := zerolog.New(buf)
-	factory, _ := scene.NewRequestFactory(scene.Config{
+	factory, _ := scene.NewSceneFactor(scene.Config{
 		FactoryIdentifier: "Test factory",
 		MaxTTL:            0,
 		LogOutput:         logger,
@@ -33,11 +33,11 @@ func TestNewCoreContextFactory(t *testing.T) {
 	t.Cleanup(func() {
 		require.True(t, factory.Shutdown(time.Second))
 	})
-	ctx, _ := factory.NewCtx()
+	ctx, _ := factory.NewScene()
 	ctx.Complete()
 	// This will block if complete didn't fire
 	<-ctx.Done()
-	ctx2, _ := factory.NewCtx()
+	ctx2, _ := factory.NewScene()
 	defer ctx2.Complete()
 	require.NotEqual(t, scene.GetRequestID(ctx), scene.GetRequestID(ctx2))
 }
@@ -48,7 +48,7 @@ func TestCoreCtxDeadline(t *testing.T) {
 	t.Run("Timeout test", func(t *testing.T) {
 		buf := tsbuffer.New()
 		logger := zerolog.New(buf)
-		factory, _ := scene.NewRequestFactory(scene.Config{
+		factory, _ := scene.NewSceneFactor(scene.Config{
 			FactoryIdentifier: "Test",
 			MaxTTL:            time.Millisecond * 100,
 			LogOutput:         logger,
@@ -57,7 +57,7 @@ func TestCoreCtxDeadline(t *testing.T) {
 			require.True(t, factory.Shutdown(time.Second))
 		})
 		now := time.Now()
-		ctx, _ := factory.NewCtx()
+		ctx, _ := factory.NewScene()
 		defer ctx.Complete()
 		deadline, ok := ctx.Deadline()
 		require.True(t, ok)
@@ -72,7 +72,7 @@ func TestCoreCtxDeadline(t *testing.T) {
 	t.Run("Completion test", func(t *testing.T) {
 		buf := tsbuffer.New()
 		logger := zerolog.New(buf)
-		factory, _ := scene.NewRequestFactory(scene.Config{
+		factory, _ := scene.NewSceneFactor(scene.Config{
 			MaxTTL:    time.Millisecond * 100,
 			LogOutput: logger,
 		}, nil)
@@ -80,7 +80,7 @@ func TestCoreCtxDeadline(t *testing.T) {
 			require.True(t, factory.Shutdown(time.Second))
 		})
 		// Cover for completion and ensure timer doesn't have issues
-		ctx, _ := factory.NewCtx()
+		ctx, _ := factory.NewScene()
 		defer ctx.Complete()
 		// Reset clock
 		now := time.Now()
@@ -97,7 +97,7 @@ func TestCoreCtxDeadline(t *testing.T) {
 	t.Run("Infinite deadline", func(t *testing.T) {
 		buf := tsbuffer.New()
 		logger := zerolog.New(buf)
-		factory, _ := scene.NewRequestFactory(scene.Config{
+		factory, _ := scene.NewSceneFactor(scene.Config{
 			MaxTTL:    scene.NoTTL,
 			LogOutput: logger,
 		}, nil)
@@ -105,7 +105,7 @@ func TestCoreCtxDeadline(t *testing.T) {
 			require.True(t, factory.Shutdown(time.Second))
 		})
 		// Cover for completion and ensure timer doesn't have issues
-		ctx, _ := factory.NewCtx()
+		ctx, _ := factory.NewScene()
 		defer ctx.Complete()
 		ts, done := ctx.Deadline()
 		require.False(t, done)
@@ -114,30 +114,28 @@ func TestCoreCtxDeadline(t *testing.T) {
 
 }
 func TestCustomContextFromContext(t *testing.T) {
-
 	t.Parallel()
 	buf := tsbuffer.New()
 	logger := zerolog.New(buf)
-	factory, _ := scene.NewRequestFactory(scene.Config{
+	factory, _ := scene.NewSceneFactor(scene.Config{
 		MaxTTL:    time.Millisecond * 100,
 		LogOutput: logger,
 	}, nil)
 	t.Cleanup(func() {
 		require.True(t, factory.Shutdown(time.Second))
 	})
-	ctx, _ := factory.NewCtx()
+	ctx, _ := factory.NewScene()
 	defer ctx.Complete()
 	wrappedContext := context.WithValue(ctx, testKey, "test")
-	resolvedCtx := scene.GetBaseContext(wrappedContext)
+	resolvedCtx := scene.GetScene(wrappedContext)
 	require.Equal(t, ctx, resolvedCtx)
 	// Handle a double wrapped context
-	ctx2, _ := factory.NewCtx()
+	ctx2, _ := factory.NewScene()
 	defer ctx2.Complete()
-	wrappedContext = context.WithValue(wrappedContext, scene.BaseContextKey{}, ctx2)
-	resolvedCtx = scene.GetBaseContext(wrappedContext)
-	require.Equal(t, ctx2, resolvedCtx)
+	ctx2.Attach(resolvedCtx)
+	require.Equal(t, scene.GetBaseContext(ctx2), scene.GetBaseContext(resolvedCtx))
 	// Handle unwrapped query
-	ctx3, _ := factory.NewCtx()
+	ctx3, _ := factory.NewScene()
 	defer ctx3.Complete()
 	require.Nil(t, ctx3.Value("banana"))
 }
@@ -145,7 +143,7 @@ func TestCustomContextFactory_Wrap(t *testing.T) {
 	t.Parallel()
 	buf := tsbuffer.New()
 	logger := zerolog.New(buf)
-	factory, _ := scene.NewRequestFactory(scene.Config{
+	factory, _ := scene.NewSceneFactor(scene.Config{
 		LogOutput: logger,
 	}, nil)
 	t.Cleanup(func() {
@@ -176,7 +174,7 @@ func TestCustomContextFactory_Wrap(t *testing.T) {
 func TestCustomContext_Spawn(t *testing.T) {
 	buf := tsbuffer.New()
 	logger := zerolog.New(buf)
-	factory, _ := scene.NewRequestFactory(scene.Config{
+	factory, _ := scene.NewSceneFactor(scene.Config{
 		MaxTTL:    time.Millisecond * 50,
 		LogOutput: logger,
 	})
@@ -185,7 +183,7 @@ func TestCustomContext_Spawn(t *testing.T) {
 	})
 	t.Run("Expiring child", func(t *testing.T) {
 
-		ctx, _ := factory.NewCtx()
+		ctx, _ := factory.NewScene()
 		defer ctx.Complete()
 		child, _ := ctx.Spawn(time.Now().Add(time.Millisecond * 100))
 		child2, _ := ctx.Spawn(time.Now().Add(time.Millisecond * 300))
@@ -214,7 +212,7 @@ func TestCustomContext_Spawn(t *testing.T) {
 	})
 	t.Run("Infinite child", func(t *testing.T) {
 
-		ctx, _ := factory.NewCtx()
+		ctx, _ := factory.NewScene()
 		defer ctx.Complete()
 		child, _ := ctx.Spawn(scene.RunForever)
 		timer2 := time.After(time.Millisecond * 200)
@@ -247,14 +245,14 @@ func TestStoreAndValue(t *testing.T) {
 	k, v := "foo", "bar"
 	buf := tsbuffer.New()
 	logger := zerolog.New(buf)
-	factory, _ := scene.NewRequestFactory(scene.Config{
+	factory, _ := scene.NewSceneFactor(scene.Config{
 		MaxTTL:    0,
 		LogOutput: logger,
 	}, nil)
 	t.Cleanup(func() {
 		require.True(t, factory.Shutdown(time.Second))
 	})
-	ctx, _ := factory.NewCtx()
+	ctx, _ := factory.NewScene()
 	defer ctx.Complete()
 	ctx.Store(k, v)
 	require.NotNil(t, v, ctx.Value(k))
@@ -266,14 +264,14 @@ func TestStoreAndValue_WithHTTPHeader(t *testing.T) {
 	h := http.Header{k: []string{v}}
 	buf := tsbuffer.New()
 	logger := zerolog.New(buf)
-	factory, _ := scene.NewRequestFactory(scene.Config{
+	factory, _ := scene.NewSceneFactor(scene.Config{
 		MaxTTL:    0,
 		LogOutput: logger,
 	}, nil)
 	t.Cleanup(func() {
 		require.True(t, factory.Shutdown(time.Second))
 	})
-	ctx, _ := factory.NewCtx()
+	ctx, _ := factory.NewScene()
 	defer ctx.Complete()
 	ctx.Store(scene.CtxHTTPHeaderKey{}, h)
 	require.NotNil(t, v, ctx.Value(scene.CtxHTTPHeaderKey{}))
@@ -283,14 +281,14 @@ func TestStoreAndValue_WithHTTPHeader(t *testing.T) {
 func TestFactory_NewCtxDeadlockFix(t *testing.T) {
 	buf := tsbuffer.New()
 	logger := zerolog.New(buf)
-	factory, _ := scene.NewRequestFactory(scene.Config{
+	factory, _ := scene.NewSceneFactor(scene.Config{
 		MaxTTL:    0,
 		LogOutput: logger,
 	}, nil)
-	ctx, _ := factory.NewCtx()
+	ctx, _ := factory.NewScene()
 	go func() {
 		time.Sleep(time.Millisecond)
-		_, err := factory.NewCtx()
+		_, err := factory.NewScene()
 		require.Error(t, err)
 		ctx.Complete()
 	}()

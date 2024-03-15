@@ -2,43 +2,57 @@ package scene_test
 
 import (
 	"bytes"
-	"encoding/json"
+	"compress/gzip"
 	"fmt"
 	"github.com/weisbartb/scene"
+	"github.com/weisbartb/scene/encoders"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/brianvoe/gofakeit"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
-	"github.com/ugorji/go/codec"
 )
 
-type testEncoder struct {
-	w          scene.StatusWriter
-	errors     []error
-	statusCode int
+type testWrapper struct {
+	Data     any `json:"data"`
+	Metadata struct {
+		Errors     []error `json:"errors"`
+		RequestID  string  `json:"requestId"`
+		StatusCode int     `json:"statusCode"`
+	} `json:"metadata"`
 }
 
-func (t *testEncoder) GetWriter() scene.StatusWriter {
-	return t.w
-}
-func (t *testEncoder) SetWriter(ctx scene.Context, w scene.StatusWriter) {
-	t.w = w
+func (t *testWrapper) AddError(err error, statusCode int) {
+	t.Metadata.StatusCode = statusCode
+	t.Metadata.Errors = append(t.Metadata.Errors, err)
 }
 
-func (t *testEncoder) AddError(err error, statusCode int) {
-	t.errors = append(t.errors, err)
-	t.statusCode = statusCode
+func (t *testWrapper) GetStatusCode() int {
+	if len(t.Metadata.Errors) == 0 {
+		return http.StatusOK
+	}
+	if t.Metadata.StatusCode > 600 || t.Metadata.StatusCode < 100 {
+		return http.StatusBadRequest
+	}
+	return t.Metadata.StatusCode
+}
+func (t *testWrapper) Wrap(writer http.ResponseWriter, obj any) any {
+	if len(t.Metadata.Errors) == 0 {
+		t.Metadata.StatusCode = 200
+	}
+	t.Metadata.RequestID = writer.Header().Get("X-Request-ID")
+	t.Data = obj
+	return t
 }
 
-func (t *testEncoder) Encode(obj any) error {
-	t.w.WriteHeader(t.statusCode)
-	return json.NewEncoder(t.w).Encode(obj)
+func (t testWrapper) New() encoders.ResponseWrapper {
+	return &testWrapper{}
 }
 
 type testHandler struct {
@@ -85,65 +99,93 @@ func (t testInjector) OnSpawnedContext(ctx scene.Context, parentContext scene.Co
 func TestRequest_MiddlewareAndEncode(t *testing.T) {
 	buf := bytes.Buffer{}
 	logger := zerolog.New(&buf)
-	factory, _ := scene.NewRequestFactory(scene.Config{
+	factory, _ := scene.NewSceneFactor(scene.Config{
 		FactoryIdentifier: "Test",
 		MaxTTL:            time.Millisecond * 50,
 		LogOutput:         logger,
 	})
-	middleware, err := scene.NewHTTPMiddleware(factory, func(ctx scene.Context, request *http.Request) scene.ResponseEncoder {
-		return &testEncoder{}
-	}, func(ctx scene.Context, request *http.Request, encoder scene.ResponseEncoder) {
-		encoder.GetWriter().Header().Set("X-Test-Injection", "test")
-	})
-	require.NoError(t, err)
-	recorder := httptest.NewRecorder()
-	var requestID string
-	handler := testHandler{
-		call: func(writer http.ResponseWriter, r *http.Request) {
-			_, ok := r.Context().(*scene.Request)
-			require.True(t, ok)
-		},
-	}
-	middleware.Next(handler)
-	parsedURL, err := url.Parse("https://www.google.com/search")
 
-	require.NoError(t, err)
-	middleware.ServeHTTP(recorder, &http.Request{
-		URL:    parsedURL,
-		Method: http.MethodPost,
-		Header: http.Header{
-			"Content-Type": []string{"application/json"},
-		},
-	})
-	require.Equal(t, "test", recorder.Header().Get("X-Test-Injection"))
-	require.Equal(t, fmt.Sprintf(`{"data":null,"metadata":{"errors":[],"requestId":"%v","statusCode":0}}`, requestID), recorder.Body.String())
-
-}
-
-func TestBindRequestToContext(t *testing.T) {
-	buf := bytes.Buffer{}
-	logger := zerolog.New(&buf)
-	t.Run("All middleware bindings", func(t *testing.T) {
-		factory, _ := scene.NewRequestFactory(scene.Config{
-			MaxTTL:    time.Millisecond * 50,
-			LogOutput: logger,
-		}, testInjector{})
-		t.Cleanup(func() {
-			factory.Shutdown(time.Second * 3)
+	t.Run("no-compression", func(t *testing.T) {
+		middleware, err := scene.NewHTTPMiddleware(factory, func(ctx scene.Context, request *http.Request) scene.ResponseEncoder {
+			switch strings.ToLower(request.Header.Get("Content-Type")) {
+			case "application/json":
+				return encoders.NewJSONEncoder(request.Header, testWrapper{})
+			default:
+				return encoders.NewJSONEncoder(request.Header, testWrapper{})
+			}
+		}, func(ctx scene.Context, request *http.Request, encoder scene.ResponseEncoder) {
+			encoder.GetWriter().Header().Set("X-Test-Injection", "test")
 		})
-		func() {
-			ctx, _ := factory.NewCtx()
-			defer ctx.Complete()
-			payload := gofakeit.Address()
-			payloadData := bytes.Buffer{}
-			encoder := codec.NewEncoder(&payloadData, &codec.JsonHandle{})
-			require.NoError(t, encoder.Encode(payload))
-			req, err := http.NewRequest(http.MethodPost, gofakeit.URL(), bytes.NewReader(payloadData.Bytes()))
-			require.NoError(t, err)
-			require.Equal(t, ctx, req.Context())
-		}()
-		// Trigger shutdown
-		factory.Shutdown(time.Second)
+		require.NoError(t, err)
+		recorder := httptest.NewRecorder()
+		var requestID string
+		handler := testHandler{
+			call: func(writer http.ResponseWriter, r *http.Request) {
+				ctx := scene.GetScene(r.Context())
+				require.NotNil(t, ctx)
+				_ = scene.GetEncoder(ctx).Encode(nil)
+				requestID = scene.GetRequestID(ctx)
+			},
+		}
+		middleware.Next(handler)
+		parsedURL, err := url.Parse("https://www.google.com/search")
+		require.NoError(t, err)
+		req := &http.Request{
+			URL:    parsedURL,
+			Method: http.MethodPost,
+			Header: http.Header{
+				"Content-Type": []string{"application/json"},
+			},
+		}
+		middleware.ServeHTTP(recorder, req)
+		recorder.Flush()
+		require.Equal(t, http.StatusOK, recorder.Code)
+		require.Equal(t, "test", recorder.Header().Get("X-Test-Injection"))
+		require.Equal(t, "application/json", recorder.Header().Get("Content-Type"))
+		require.Equal(t, fmt.Sprintf(`{"data":null,"metadata":{"errors":null,"requestId":"%v","statusCode":200}}`, requestID), strings.TrimSpace(recorder.Body.String()))
+	})
+	t.Run("gzip", func(t *testing.T) {
+		middleware, err := scene.NewHTTPMiddleware(factory, func(ctx scene.Context, request *http.Request) scene.ResponseEncoder {
+			switch strings.ToLower(request.Header.Get("Content-Type")) {
+			case "application/json":
+				return encoders.NewJSONEncoder(request.Header, testWrapper{})
+			default:
+				return encoders.NewJSONEncoder(request.Header, testWrapper{})
+			}
+		}, func(ctx scene.Context, request *http.Request, encoder scene.ResponseEncoder) {
+			encoder.GetWriter().Header().Set("X-Test-Injection", "test")
+		})
+		require.NoError(t, err)
+		recorder := httptest.NewRecorder()
+		var requestID string
+		handler := testHandler{
+			call: func(writer http.ResponseWriter, r *http.Request) {
+				ctx := scene.GetScene(r.Context())
+				require.NotNil(t, ctx)
+				_ = scene.GetEncoder(ctx).Encode(nil)
+				requestID = scene.GetRequestID(ctx)
+			},
+		}
+		middleware.Next(handler)
+		parsedURL, err := url.Parse("https://www.google.com/search")
+		require.NoError(t, err)
+		req := &http.Request{
+			URL:    parsedURL,
+			Method: http.MethodPost,
+			Header: http.Header{
+				"Content-Type":    []string{"application/json"},
+				"Accept-Encoding": []string{"gzip"},
+			},
+		}
+		middleware.ServeHTTP(recorder, req)
+		require.Equal(t, http.StatusOK, recorder.Code)
+		require.Equal(t, "test", recorder.Header().Get("X-Test-Injection"))
+		require.Equal(t, "application/json", recorder.Header().Get("Content-Type"))
+		r, err := gzip.NewReader(recorder.Body)
+		require.NoError(t, err)
+		data, err := io.ReadAll(r)
+		require.NoError(t, err)
+		require.Equal(t, fmt.Sprintf(`{"data":null,"metadata":{"errors":null,"requestId":"%v","statusCode":200}}`, requestID), strings.TrimSpace(string(data)))
 	})
 
 }
