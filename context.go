@@ -76,6 +76,15 @@ func (c *context) refreshDeadline() {
 	}
 }
 
+func (c *context) Extend(runUntil time.Time) {
+	c.mu.Lock()
+	deadline := runUntil.Sub(time.Now())
+	c.deadline = deadline
+	c.completeBy = time.Now().Add(deadline).UnixNano()
+	go c.refreshDeadline()
+	c.mu.Unlock()
+}
+
 func (c *context) Attach(ctx ogContext.Context) {
 	if c2, ok := ctx.(*context); ok {
 		c.Context = c2.Context

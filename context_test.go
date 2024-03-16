@@ -33,11 +33,11 @@ func TestNewCoreContextFactory(t *testing.T) {
 	t.Cleanup(func() {
 		require.True(t, factory.Shutdown(time.Second))
 	})
-	ctx, _ := factory.NewScene()
+	ctx, _ := factory.NewCtx()
 	ctx.Complete()
 	// This will block if complete didn't fire
 	<-ctx.Done()
-	ctx2, _ := factory.NewScene()
+	ctx2, _ := factory.NewCtx()
 	defer ctx2.Complete()
 	require.NotEqual(t, scene.GetRequestID(ctx), scene.GetRequestID(ctx2))
 }
@@ -57,7 +57,7 @@ func TestCoreCtxDeadline(t *testing.T) {
 			require.True(t, factory.Shutdown(time.Second))
 		})
 		now := time.Now()
-		ctx, _ := factory.NewScene()
+		ctx, _ := factory.NewCtx()
 		defer ctx.Complete()
 		deadline, ok := ctx.Deadline()
 		require.True(t, ok)
@@ -80,7 +80,7 @@ func TestCoreCtxDeadline(t *testing.T) {
 			require.True(t, factory.Shutdown(time.Second))
 		})
 		// Cover for completion and ensure timer doesn't have issues
-		ctx, _ := factory.NewScene()
+		ctx, _ := factory.NewCtx()
 		defer ctx.Complete()
 		// Reset clock
 		now := time.Now()
@@ -105,7 +105,7 @@ func TestCoreCtxDeadline(t *testing.T) {
 			require.True(t, factory.Shutdown(time.Second))
 		})
 		// Cover for completion and ensure timer doesn't have issues
-		ctx, _ := factory.NewScene()
+		ctx, _ := factory.NewCtx()
 		defer ctx.Complete()
 		ts, done := ctx.Deadline()
 		require.False(t, done)
@@ -124,18 +124,18 @@ func TestCustomContextFromContext(t *testing.T) {
 	t.Cleanup(func() {
 		require.True(t, factory.Shutdown(time.Second))
 	})
-	ctx, _ := factory.NewScene()
+	ctx, _ := factory.NewCtx()
 	defer ctx.Complete()
 	wrappedContext := context.WithValue(ctx, testKey, "test")
 	resolvedCtx := scene.GetScene(wrappedContext)
 	require.Equal(t, ctx, resolvedCtx)
 	// Handle a double wrapped context
-	ctx2, _ := factory.NewScene()
+	ctx2, _ := factory.NewCtx()
 	defer ctx2.Complete()
 	ctx2.Attach(resolvedCtx)
 	require.Equal(t, scene.GetBaseContext(ctx2), scene.GetBaseContext(resolvedCtx))
 	// Handle unwrapped query
-	ctx3, _ := factory.NewScene()
+	ctx3, _ := factory.NewCtx()
 	defer ctx3.Complete()
 	require.Nil(t, ctx3.Value("banana"))
 }
@@ -183,7 +183,7 @@ func TestCustomContext_Spawn(t *testing.T) {
 	})
 	t.Run("Expiring child", func(t *testing.T) {
 
-		ctx, _ := factory.NewScene()
+		ctx, _ := factory.NewCtx()
 		defer ctx.Complete()
 		child, _ := ctx.Spawn(time.Now().Add(time.Millisecond * 100))
 		child2, _ := ctx.Spawn(time.Now().Add(time.Millisecond * 300))
@@ -209,10 +209,12 @@ func TestCustomContext_Spawn(t *testing.T) {
 		child2.Complete()
 		<-child2.Done()
 		require.Equal(t, child2.Err().Error(), scene.ErrComplete.Error())
+		_, err := child.Spawn(scene.RunForever)
+		require.ErrorIs(t, scene.ErrShutdownInProgress, err)
 	})
 	t.Run("Infinite child", func(t *testing.T) {
 
-		ctx, _ := factory.NewScene()
+		ctx, _ := factory.NewCtx()
 		defer ctx.Complete()
 		child, _ := ctx.Spawn(scene.RunForever)
 		timer2 := time.After(time.Millisecond * 200)
@@ -252,7 +254,7 @@ func TestStoreAndValue(t *testing.T) {
 	t.Cleanup(func() {
 		require.True(t, factory.Shutdown(time.Second))
 	})
-	ctx, _ := factory.NewScene()
+	ctx, _ := factory.NewCtx()
 	defer ctx.Complete()
 	ctx.Store(k, v)
 	require.NotNil(t, v, ctx.Value(k))
@@ -271,7 +273,7 @@ func TestStoreAndValue_WithHTTPHeader(t *testing.T) {
 	t.Cleanup(func() {
 		require.True(t, factory.Shutdown(time.Second))
 	})
-	ctx, _ := factory.NewScene()
+	ctx, _ := factory.NewCtx()
 	defer ctx.Complete()
 	ctx.Store(scene.CtxHTTPHeaderKey{}, h)
 	require.NotNil(t, v, ctx.Value(scene.CtxHTTPHeaderKey{}))
@@ -285,12 +287,96 @@ func TestFactory_NewCtxDeadlockFix(t *testing.T) {
 		MaxTTL:    0,
 		LogOutput: logger,
 	}, nil)
-	ctx, _ := factory.NewScene()
+	ctx, _ := factory.NewCtx()
 	go func() {
 		time.Sleep(time.Millisecond)
-		_, err := factory.NewScene()
+		_, err := factory.NewCtx()
 		require.Error(t, err)
 		ctx.Complete()
 	}()
 	require.True(t, factory.Shutdown(time.Second))
+}
+
+func TestContext_Extend(t *testing.T) {
+	buf := tsbuffer.New()
+	logger := zerolog.New(buf)
+	factory, _ := scene.NewSceneFactor(scene.Config{
+		FactoryIdentifier: "Test factory",
+		MaxTTL:            time.Millisecond * 100,
+		LogOutput:         logger,
+	}, nil)
+	t.Cleanup(func() {
+		require.True(t, factory.Shutdown(time.Second))
+	})
+	ctx, err := factory.NewCtx()
+	defer ctx.Complete()
+	require.NoError(t, err)
+	dl, ok := ctx.Deadline()
+	require.True(t, ok)
+	require.True(t, dl.After(time.Now()))
+	ctx.Extend(time.Now().Add(time.Millisecond * 200))
+	dl2, ok := ctx.Deadline()
+	require.True(t, ok)
+	require.True(t, dl2.After(dl))
+	<-ctx.Done()
+	require.GreaterOrEqual(t, time.Now().Sub(dl2), time.Duration(0))
+	require.LessOrEqual(t, time.Now().Sub(dl2), time.Millisecond*400)
+}
+
+func TestContext_Attach(t *testing.T) {
+	buf := tsbuffer.New()
+	logger := zerolog.New(buf)
+	factory, _ := scene.NewSceneFactor(scene.Config{
+		FactoryIdentifier: "Test factory",
+		MaxTTL:            time.Millisecond * 100,
+		LogOutput:         logger,
+	}, nil)
+	t.Cleanup(func() {
+		require.True(t, factory.Shutdown(time.Second))
+	})
+	ctx, err := factory.NewCtx()
+	defer ctx.Complete()
+	require.NoError(t, err)
+	ctx.Attach(context.Background())
+	require.Equal(t, context.Background(), ctx.GetBaseCtx())
+}
+
+func TestContext_Defer(t *testing.T) {
+	buf := tsbuffer.New()
+	logger := zerolog.New(buf)
+	factory, _ := scene.NewSceneFactor(scene.Config{
+		FactoryIdentifier: "Test factory",
+		MaxTTL:            time.Millisecond * 100,
+		LogOutput:         logger,
+	}, nil)
+	var c = make(chan struct{})
+	t.Cleanup(func() {
+		<-c
+		require.True(t, factory.Shutdown(time.Second))
+	})
+	ctx, err := factory.NewCtx()
+	defer ctx.Complete()
+	require.NoError(t, err)
+	ctx.Defer(func(ctx scene.Context, completeErr error) {
+		close(c)
+	})
+}
+
+func TestContext_Store(t *testing.T) {
+	buf := tsbuffer.New()
+	logger := zerolog.New(buf)
+	factory, _ := scene.NewSceneFactor(scene.Config{
+		FactoryIdentifier: "Test factory",
+		MaxTTL:            time.Millisecond * 100,
+		LogOutput:         logger,
+	}, nil)
+
+	ctx, err := factory.NewCtx()
+	require.NoError(t, err)
+	ctx.Store("test", "val")
+	require.Equal(t, "val", ctx.Value("test").(string))
+	ctx.Complete()
+	ctx.Store("test", "val")
+	require.Equal(t, nil, ctx.Value("test"))
+
 }

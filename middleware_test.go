@@ -104,7 +104,9 @@ func TestRequest_MiddlewareAndEncode(t *testing.T) {
 		MaxTTL:            time.Millisecond * 50,
 		LogOutput:         logger,
 	})
-
+	t.Cleanup(func() {
+		require.True(t, factory.Shutdown(time.Second))
+	})
 	t.Run("no-compression", func(t *testing.T) {
 		middleware, err := scene.NewHTTPMiddleware(factory, func(ctx scene.Context, request *http.Request) scene.ResponseEncoder {
 			switch strings.ToLower(request.Header.Get("Content-Type")) {
@@ -188,4 +190,23 @@ func TestRequest_MiddlewareAndEncode(t *testing.T) {
 		require.Equal(t, fmt.Sprintf(`{"data":null,"metadata":{"errors":null,"requestId":"%v","statusCode":200}}`, requestID), strings.TrimSpace(string(data)))
 	})
 
+}
+
+func TestNewHTTPMiddleware(t *testing.T) {
+	buf := bytes.Buffer{}
+	logger := zerolog.New(&buf)
+	factory, _ := scene.NewSceneFactor(scene.Config{
+		FactoryIdentifier: "Test",
+		MaxTTL:            time.Millisecond * 50,
+		LogOutput:         logger,
+	})
+	t.Cleanup(func() {
+		require.True(t, factory.Shutdown(time.Second))
+	})
+	ctx, err := factory.NewCtx()
+	require.NoError(t, err)
+	enc := scene.GetEncoder(ctx)
+	enc.AddError(nil, 200)
+	enc.SetWriter(ctx, enc.GetWriter())
+	require.NoError(t, enc.Encode(nil))
 }

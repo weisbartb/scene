@@ -68,6 +68,8 @@ type Context interface {
 	GetLastError() error
 	// GetBaseCtx gets the underlying context.Context that may have been used to create the Scene.
 	GetBaseCtx() ogContext.Context
+	// Extend extends the duration of the context
+	Extend(until time.Time)
 }
 
 // FactoryDefaultValuer allows for full access to the factory's default setup
@@ -82,7 +84,7 @@ type FactoryStore interface {
 	// GetDefault gets the default value for a key from a given factory.
 	GetDefault(key any) any
 	// NewScene creates a new Scene.
-	NewScene() (Context, error)
+	NewCtx() (Context, error)
 }
 
 // Provider g

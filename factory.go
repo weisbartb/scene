@@ -133,17 +133,12 @@ func (factory *Factory) OpenContexts() int {
 	return int(atomic.LoadInt32(&factory.openContexts))
 }
 
-// NewScene creates a new context for the application
-func (factory *Factory) NewScene() (Context, error) {
+// NewCtx creates a new context for the application
+func (factory *Factory) NewCtx() (Context, error) {
 	if factory.closed.Load() {
 		return nil, ErrShutdownInProgress
 	}
 	return factory.newCtx(ogContext.Background(), factory.requestTTL), nil
-}
-
-// DefaultTTL gets the default TTL
-func (factory *Factory) DefaultTTL() time.Duration {
-	return factory.requestTTL
 }
 
 func (factory *Factory) newCtx(baseCtx ogContext.Context, deadline time.Duration) Context {

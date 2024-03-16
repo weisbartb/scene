@@ -1,6 +1,7 @@
 package scene_test
 
 import (
+	"context"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 	"github.com/weisbartb/scene"
@@ -18,7 +19,10 @@ func TestBaseProvider(t *testing.T) {
 		MaxTTL:            time.Millisecond * 50,
 		LogOutput:         logger,
 	}, scene.BaseProvider{})
-	ctx, err := factory.NewScene()
+	t.Cleanup(func() {
+		require.True(t, factory.Shutdown(time.Second))
+	})
+	ctx, err := factory.NewCtx()
 	require.NoError(t, err)
 	require.NotNil(t, ctx)
 	ctx2, err := ctx.Spawn(time.Now().Add(time.Second))
@@ -27,4 +31,8 @@ func TestBaseProvider(t *testing.T) {
 	ctx.Complete()
 	ctx2.Complete()
 	factory.Shutdown(time.Second)
+}
+
+func TestGetEmptyScene(t *testing.T) {
+	require.Nil(t, scene.GetScene(context.Background()))
 }
