@@ -99,7 +99,7 @@ func (t testInjector) OnSpawnedContext(ctx scene.Context, parentContext scene.Co
 func TestRequest_MiddlewareAndEncode(t *testing.T) {
 	buf := bytes.Buffer{}
 	logger := zerolog.New(&buf)
-	factory, _ := scene.NewSceneFactor(scene.Config{
+	factory, _ := scene.NewSceneFactory(scene.Config{
 		FactoryIdentifier: "Test",
 		MaxTTL:            time.Millisecond * 50,
 		LogOutput:         logger,
@@ -195,7 +195,7 @@ func TestRequest_MiddlewareAndEncode(t *testing.T) {
 func TestNewHTTPMiddleware(t *testing.T) {
 	buf := bytes.Buffer{}
 	logger := zerolog.New(&buf)
-	factory, _ := scene.NewSceneFactor(scene.Config{
+	factory, _ := scene.NewSceneFactory(scene.Config{
 		FactoryIdentifier: "Test",
 		MaxTTL:            time.Millisecond * 50,
 		LogOutput:         logger,

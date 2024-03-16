@@ -14,7 +14,7 @@ func TestBaseProvider(t *testing.T) {
 	// This is just to provide coverage for scene.BaseProvider which does nothing
 	buf := tsbuffer.New()
 	logger := zerolog.New(buf)
-	factory, _ := scene.NewSceneFactor(scene.Config{
+	factory, _ := scene.NewSceneFactory(scene.Config{
 		FactoryIdentifier: "Test",
 		MaxTTL:            time.Millisecond * 50,
 		LogOutput:         logger,

@@ -25,7 +25,7 @@ func TestNewCoreContextFactory(t *testing.T) {
 	t.Parallel()
 	buf := tsbuffer.New()
 	logger := zerolog.New(buf)
-	factory, _ := scene.NewSceneFactor(scene.Config{
+	factory, _ := scene.NewSceneFactory(scene.Config{
 		FactoryIdentifier: "Test factory",
 		MaxTTL:            0,
 		LogOutput:         logger,
@@ -48,7 +48,7 @@ func TestCoreCtxDeadline(t *testing.T) {
 	t.Run("Timeout test", func(t *testing.T) {
 		buf := tsbuffer.New()
 		logger := zerolog.New(buf)
-		factory, _ := scene.NewSceneFactor(scene.Config{
+		factory, _ := scene.NewSceneFactory(scene.Config{
 			FactoryIdentifier: "Test",
 			MaxTTL:            time.Millisecond * 100,
 			LogOutput:         logger,
@@ -72,7 +72,7 @@ func TestCoreCtxDeadline(t *testing.T) {
 	t.Run("Completion test", func(t *testing.T) {
 		buf := tsbuffer.New()
 		logger := zerolog.New(buf)
-		factory, _ := scene.NewSceneFactor(scene.Config{
+		factory, _ := scene.NewSceneFactory(scene.Config{
 			MaxTTL:    time.Millisecond * 100,
 			LogOutput: logger,
 		}, nil)
@@ -97,7 +97,7 @@ func TestCoreCtxDeadline(t *testing.T) {
 	t.Run("Infinite deadline", func(t *testing.T) {
 		buf := tsbuffer.New()
 		logger := zerolog.New(buf)
-		factory, _ := scene.NewSceneFactor(scene.Config{
+		factory, _ := scene.NewSceneFactory(scene.Config{
 			MaxTTL:    scene.NoTTL,
 			LogOutput: logger,
 		}, nil)
@@ -117,7 +117,7 @@ func TestCustomContextFromContext(t *testing.T) {
 	t.Parallel()
 	buf := tsbuffer.New()
 	logger := zerolog.New(buf)
-	factory, _ := scene.NewSceneFactor(scene.Config{
+	factory, _ := scene.NewSceneFactory(scene.Config{
 		MaxTTL:    time.Millisecond * 100,
 		LogOutput: logger,
 	}, nil)
@@ -143,7 +143,7 @@ func TestCustomContextFactory_Wrap(t *testing.T) {
 	t.Parallel()
 	buf := tsbuffer.New()
 	logger := zerolog.New(buf)
-	factory, _ := scene.NewSceneFactor(scene.Config{
+	factory, _ := scene.NewSceneFactory(scene.Config{
 		LogOutput: logger,
 	}, nil)
 	t.Cleanup(func() {
@@ -174,7 +174,7 @@ func TestCustomContextFactory_Wrap(t *testing.T) {
 func TestCustomContext_Spawn(t *testing.T) {
 	buf := tsbuffer.New()
 	logger := zerolog.New(buf)
-	factory, _ := scene.NewSceneFactor(scene.Config{
+	factory, _ := scene.NewSceneFactory(scene.Config{
 		MaxTTL:    time.Millisecond * 50,
 		LogOutput: logger,
 	})
@@ -247,7 +247,7 @@ func TestStoreAndValue(t *testing.T) {
 	k, v := "foo", "bar"
 	buf := tsbuffer.New()
 	logger := zerolog.New(buf)
-	factory, _ := scene.NewSceneFactor(scene.Config{
+	factory, _ := scene.NewSceneFactory(scene.Config{
 		MaxTTL:    0,
 		LogOutput: logger,
 	}, nil)
@@ -266,7 +266,7 @@ func TestStoreAndValue_WithHTTPHeader(t *testing.T) {
 	h := http.Header{k: []string{v}}
 	buf := tsbuffer.New()
 	logger := zerolog.New(buf)
-	factory, _ := scene.NewSceneFactor(scene.Config{
+	factory, _ := scene.NewSceneFactory(scene.Config{
 		MaxTTL:    0,
 		LogOutput: logger,
 	}, nil)
@@ -283,7 +283,7 @@ func TestStoreAndValue_WithHTTPHeader(t *testing.T) {
 func TestFactory_NewCtxDeadlockFix(t *testing.T) {
 	buf := tsbuffer.New()
 	logger := zerolog.New(buf)
-	factory, _ := scene.NewSceneFactor(scene.Config{
+	factory, _ := scene.NewSceneFactory(scene.Config{
 		MaxTTL:    0,
 		LogOutput: logger,
 	}, nil)
@@ -300,7 +300,7 @@ func TestFactory_NewCtxDeadlockFix(t *testing.T) {
 func TestContext_Extend(t *testing.T) {
 	buf := tsbuffer.New()
 	logger := zerolog.New(buf)
-	factory, _ := scene.NewSceneFactor(scene.Config{
+	factory, _ := scene.NewSceneFactory(scene.Config{
 		FactoryIdentifier: "Test factory",
 		MaxTTL:            time.Millisecond * 100,
 		LogOutput:         logger,
@@ -326,7 +326,7 @@ func TestContext_Extend(t *testing.T) {
 func TestContext_Attach(t *testing.T) {
 	buf := tsbuffer.New()
 	logger := zerolog.New(buf)
-	factory, _ := scene.NewSceneFactor(scene.Config{
+	factory, _ := scene.NewSceneFactory(scene.Config{
 		FactoryIdentifier: "Test factory",
 		MaxTTL:            time.Millisecond * 100,
 		LogOutput:         logger,
@@ -344,7 +344,7 @@ func TestContext_Attach(t *testing.T) {
 func TestContext_Defer(t *testing.T) {
 	buf := tsbuffer.New()
 	logger := zerolog.New(buf)
-	factory, _ := scene.NewSceneFactor(scene.Config{
+	factory, _ := scene.NewSceneFactory(scene.Config{
 		FactoryIdentifier: "Test factory",
 		MaxTTL:            time.Millisecond * 100,
 		LogOutput:         logger,
@@ -365,7 +365,7 @@ func TestContext_Defer(t *testing.T) {
 func TestContext_Store(t *testing.T) {
 	buf := tsbuffer.New()
 	logger := zerolog.New(buf)
-	factory, _ := scene.NewSceneFactor(scene.Config{
+	factory, _ := scene.NewSceneFactory(scene.Config{
 		FactoryIdentifier: "Test factory",
 		MaxTTL:            time.Millisecond * 100,
 		LogOutput:         logger,

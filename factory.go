@@ -52,10 +52,10 @@ func (factory *Factory) GetDefault(key any) any {
 	return factory.defaultContextValues[key]
 }
 
-// NewSceneFactor creates a new context factory off a given configuration.
+// NewSceneFactory creates a new context factory off a given configuration.
 // Factories should be created with all injectors allocated at the time they are created.
 // Dynamic addition of injectors is not supported
-func NewSceneFactor(config Config, injectors ...Provider) (*Factory, error) {
+func NewSceneFactory(config Config, injectors ...Provider) (*Factory, error) {
 	factory := &Factory{
 		defaultsLock:         &sync.RWMutex{},
 		requestTTL:           config.MaxTTL,

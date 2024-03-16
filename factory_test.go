@@ -12,7 +12,7 @@ import (
 func TestFactory_Defaults(t *testing.T) {
 	buf := tsbuffer.New()
 	logger := zerolog.New(buf)
-	factory, _ := scene.NewSceneFactor(scene.Config{
+	factory, _ := scene.NewSceneFactory(scene.Config{
 		FactoryIdentifier: "Test",
 		MaxTTL:            time.Millisecond * 50,
 		LogOutput:         logger,
@@ -36,7 +36,7 @@ func TestFactory_Defaults(t *testing.T) {
 func TestFactory_Shutdown(t *testing.T) {
 	buf := tsbuffer.New()
 	logger := zerolog.New(buf)
-	factory, _ := scene.NewSceneFactor(scene.Config{
+	factory, _ := scene.NewSceneFactory(scene.Config{
 		FactoryIdentifier: "Test",
 		MaxTTL:            time.Millisecond * 50,
 		LogOutput:         logger,
@@ -48,7 +48,7 @@ func TestFactory_Shutdown(t *testing.T) {
 func TestFactory_OpenContexts(t *testing.T) {
 	buf := tsbuffer.New()
 	logger := zerolog.New(buf)
-	factory, _ := scene.NewSceneFactor(scene.Config{
+	factory, _ := scene.NewSceneFactory(scene.Config{
 		FactoryIdentifier: "Test",
 		MaxTTL:            time.Millisecond * 50,
 		LogOutput:         logger,
