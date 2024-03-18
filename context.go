@@ -219,9 +219,11 @@ func (c *context) CompleteWithError(err error) {
 		c.err = ErrComplete
 	}
 	// Do this as a LIFO queue
+	// This section needs to be unlocked to allow these methods to access context variables
 	for i := len(c.onComplete) - 1; i >= 0; i-- {
 		c.onComplete[i](c, err)
 	}
+	c.mu.Lock()
 	close(c.complete)
 	// Clear out all references in the context values.
 	// It is possible for a cyclical reference to be placed in the context leading to a subtle memory leak.
@@ -229,4 +231,5 @@ func (c *context) CompleteWithError(err error) {
 		delete(c.contextValues, k)
 	}
 	c.contextValues = nil
+	c.mu.Unlock()
 }
